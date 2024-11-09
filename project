@@ -1,0 +1,116 @@
+# Import necessary libraries
+import pandas as pd
+import re
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+from imblearn.over_sampling import SMOTE
+import nltk
+
+# Ensure NLTK finds stopwords
+nltk.data.path.append('/Users/ughurt/nltk_data')
+from nltk.corpus import stopwords
+stop_words = set(stopwords.words('english'))
+
+# Load data
+print("Loading data...")
+reviews_df = pd.read_csv('/Users/ughurt/Downloads/Reviews.csv')
+
+# Check the column names
+print("Columns in the dataset:", reviews_df.columns.tolist())
+
+# Clean and preprocess data
+def clean_text(text):
+    text = re.sub(r'[^a-zA-Z\s]', '', text.lower())  # Remove punctuation and lowercase
+    return ' '.join([word for word in text.split() if word not in stop_words])
+
+# Clean the review text
+print("Cleaning text...")
+reviews_df['CleanText'] = reviews_df['Text'].apply(clean_text)
+
+# Convert Time column to datetime format
+print("Converting Time column...")
+reviews_df['Time'] = pd.to_datetime(reviews_df['Time'], unit='s')  # Adjust if necessary
+
+# Sentiment labeling function
+def create_labels(score):
+    if score in [1, 2]:
+        return 'Negative'
+    elif score == 3:
+        return 'Neutral'
+    else:
+        return 'Positive'
+
+# Create sentiment labels
+reviews_df['Sentiment'] = reviews_df['Score'].apply(create_labels)
+
+# Prepare the data for training
+X = reviews_df['CleanText']  # Features
+y = reviews_df['Sentiment']  # Labels
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Vectorize the text using TF-IDF with bigrams and trigrams
+print("Vectorizing text using TF-IDF with bigrams and trigrams...")
+vectorizer = TfidfVectorizer(ngram_range=(1, 3), max_features=2000)  # Using bigrams and trigrams
+X_train_vectorized = vectorizer.fit_transform(X_train)
+X_test_vectorized = vectorizer.transform(X_test)
+
+# Apply SMOTE to balance the classes
+print("Applying SMOTE to balance classes...")
+smote = SMOTE(random_state=42)
+X_train_smote, y_train_smote = smote.fit_resample(X_train_vectorized, y_train)
+
+# Train the Logistic Regression model with class weighting
+print("Training Logistic Regression model with class balancing...")
+model = LogisticRegression(class_weight='balanced', max_iter=500, random_state=42)
+
+# Hyperparameter tuning using Grid Search
+param_grid = {
+    'C': [0.01, 0.1, 1, 10, 100],  # Regularization parameter
+}
+grid_search = GridSearchCV(model, param_grid, cv=3, scoring='f1_weighted')
+grid_search.fit(X_train_smote, y_train_smote)
+
+# Best model after hyperparameter tuning
+best_model = grid_search.best_estimator_
+
+# Predict on the test set
+print("Making predictions...")
+y_pred = best_model.predict(X_test_vectorized)
+
+# Evaluate the model
+print("Classification Report:")
+print(classification_report(y_test, y_pred))
+
+# Confusion Matrix
+print("Generating confusion matrix...")
+conf_matrix = confusion_matrix(y_test, y_pred, labels=best_model.classes_)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, cmap='Blues', fmt='g', xticklabels=best_model.classes_, yticklabels=best_model.classes_)
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('True')
+plt.show()
+
+# Extract year and month for trend analysis
+reviews_df['YearMonth'] = reviews_df['Time'].dt.to_period('M')
+
+# Aggregate sentiment counts over time
+print("Aggregating sentiment counts over time...")
+sentiment_trends = reviews_df.groupby(['YearMonth', 'Sentiment']).size().unstack(fill_value=0)
+
+# Plotting the sentiment trends
+print("Plotting sentiment trends...")
+sentiment_trends.plot(kind='line', marker='o')
+plt.title('Sentiment Trends Over Time')
+plt.xlabel('Time (Year-Month)')
+plt.ylabel('Number of Reviews')
+plt.xticks(rotation=45)
+plt.legend(title='Sentiment')
+plt.tight_layout()
+plt.show()
